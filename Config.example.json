@@ -1,0 +1,16 @@
+{
+  "app_name": "Dot",
+  "bundle_id": "com.example.dotwatch",
+  "development_team": "",
+  "signing": "automatic",
+  "provisioning_profile": "",
+  "siri_aliases": [
+    "Dot"
+  ],
+  "accent_hex": "45D6E8",
+  "app_icon": null,
+  "avatar": null,
+  "default_agent_page": "",
+  "url_scheme": "dotwatch",
+  "widget_kind": "DotCall"
+}

@@ -1,0 +1,27 @@
+# Generated or personal configuration
+Generated/
+*.xcodeproj/
+Config.local.json
+*.local.json
+signing.local.yml
+# Builds, test output, account data and signing material
+.build/
+.swiftpm/
+DerivedData/
+work/
+.DS_Store
+*.xcuserstate
+*.xcarchive/
+*.app/
+*.ipa
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.p8
+*.pem
+*.key
+*.log
+.env
+.env.*
+__pycache__/
+*.pyc

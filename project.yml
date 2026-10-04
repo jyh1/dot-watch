@@ -1,0 +1,89 @@
+name: DotWatch
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "26.0"
+    watchOS: "26.0"
+include:
+  - path: Generated/Settings.yml
+packages:
+  DirectRTC:
+    path: DirectRTC
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: Apple Development
+    MARKETING_VERSION: "1.0.2"
+    CURRENT_PROJECT_VERSION: 21
+    GENERATE_INFOPLIST_FILE: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+targets:
+  DotWatchPhone:
+    type: application
+    platform: iOS
+    sources: [Shared, Phone, Generated/Assets.xcassets]
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: DotIcon
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1"
+    info:
+      path: Generated/Phone-Info.plist
+      properties:
+        UIBackgroundModes: [audio, voip]
+        NSFaceIDUsageDescription: Authenticate your ChatGPT sign-in when you choose a passkey.
+    dependencies:
+      - package: DirectRTC
+      - target: DotWatchWatch
+        embed: true
+  DotWatchWatch:
+    type: application
+    platform: watchOS
+    sources: [Shared, Watch, Generated/Assets.xcassets]
+    dependencies:
+      - package: DirectRTC
+      - target: DotWidget
+        embed: true
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: DotIcon
+        INFOPLIST_KEY_WKApplication: YES
+    info:
+      path: Generated/Watch-Info.plist
+      properties:
+        UIBackgroundModes: [audio, voip]
+  DotWidget:
+    type: app-extension
+    platform: watchOS
+    sources: [Widget, Shared/CallRoute.swift, Shared/AppBrand.swift, Generated/Widget]
+    settings:
+      base:
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+    info:
+      path: Generated/Widget-Info.plist
+      properties:
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  DotWatchTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests, Shared]
+    dependencies:
+      - package: DirectRTC
+schemes:
+  DotWatchTests:
+    build:
+      targets:
+        DotWatchTests: all
+    test:
+      targets: [DotWatchTests]
+  DotWatchPhone:
+    build:
+      targets:
+        DotWatchPhone: all
+  DotWatchWatch:
+    build:
+      targets:
+        DotWatchWatch: all
