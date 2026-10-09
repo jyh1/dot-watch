@@ -36,6 +36,8 @@ DOTWATCH_CONFIG=/path/to/private/personal.json bash Tools/build.sh
 
 Optional `DOTWATCH_BUILD_DIR` controls DerivedData and `DOTWATCH_CONFIGURATION` selects Debug or Release. With manual signing, the configured profile must cover all three app IDs. Xcode can manage separate profiles with automatic signing.
 
+The generator assigns the icon to both iOS and watchOS explicitly. After compiling, `Tools/build.sh` checks that both installed app bundles contain primary-icon metadata and a compiled icon image. A missing icon fails the build check instead of silently producing a blank app icon.
+
 The iPhone and Watch derive the Keychain service from the root bundle ID. Retaining that ID, the signing team, URL scheme and widget kind preserves the intended upgrade identity. Do not share a bundle ID between public demo and personal installations.
 
 Configuration is for branding and build identity, **not credentials**. Tokens, passwords and cookies are not supported configuration fields. The page ID and signing identity may still be personal information; keep them out of commits and release archives.

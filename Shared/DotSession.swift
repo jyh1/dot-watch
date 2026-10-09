@@ -42,14 +42,19 @@ enum SessionCookies {
     #endif
 }
 @MainActor enum DotSession {
-    private static var renewal: Task<DotAccount, Error>?
+    private static var renewal: (accountID: String, dotID: String, task: Task<DotAccount, Error>)?
     static func valid(_ account: DotAccount, force: Bool = false) async throws -> DotAccount {
         let cached = AccountVault.load()
         let current = cached?.accountID == account.accountID && cached?.dotID == account.dotID ? cached! : account
         if !force && !current.tokenExpired { return current }
-        if let renewal { return try await renewal.value }
+        if let renewal {
+            guard renewal.accountID == current.accountID, renewal.dotID == current.dotID else {
+                throw RelayFailure(message: "The connected Dot changed. Try again after login finishes.")
+            }
+            return try await renewal.task.value
+        }
         let task = Task { try await refresh(current) }
-        renewal = task
+        renewal = (current.accountID, current.dotID, task)
         defer { renewal = nil }
         return try await task.value
     }
@@ -70,9 +75,16 @@ enum SessionCookies {
         let (data,response) = try await session.data(for:request)
         guard let response = response as? HTTPURLResponse else { throw RelayFailure(message: "ChatGPT returned an invalid session response.") }
         let next = try refreshedAccount(data: data, response: response, original: account)
+        try validateRefreshDestination(original: account, current: AccountVault.load())
         try AccountVault.save(next)
         try SessionCookies.save(config.httpCookieStorage?.cookies ?? cookies)
         return next
+    }
+    static func validateRefreshDestination(original: DotAccount, current: DotAccount?) throws {
+        guard let current, current.accountID == original.accountID,
+              current.dotID == original.dotID, current.token == original.token else {
+            throw RelayFailure(message: "The saved login changed during refresh. Try again with the current Dot.")
+        }
     }
     // Validate before persisting: a login change must never silently switch the agent's account.
     static func refreshedAccount(data: Data, response: HTTPURLResponse, original account: DotAccount) throws -> DotAccount {

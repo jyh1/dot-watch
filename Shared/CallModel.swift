@@ -12,6 +12,13 @@ import DirectRTC
     private let deviceName = "iPhone"
     #endif
     private let widgetLaunch = ForegroundCallLauncher()
+    private var sceneIsActive = false
+
+    func updateScenePhase(_ phase: ScenePhase) {
+        sceneIsActive = phase == .active
+        if phase == .background { cancelWidgetLaunch() }
+    }
+    func cancelWidgetLaunch() { widgetLaunch.cancel() }
     private var siriWaiters: [ReplyGate<Void>] = []
     private var registrationResult: Result<Void, Error>?
     @Published var phase = "idle"
@@ -28,22 +35,28 @@ import DirectRTC
     private var direct: DirectCall?
     private var lastStatistics: [String: Int] = [:]
     private var generation = 0
-    private var sendTask: Task<Void, Never>?
+    private var audioPump: CallAudioPump?
     private var startTask: Task<Void, Never>?
 
     func startFromWidget() {
         guard phase == "idle", !finishing else { return }
-        link.reportWatchEvent("Widget call requested; app active \(ForegroundCallLauncher.appIsActive())")
-        widgetLaunch.request(start: { [weak self] in
+        link.reportWatchEvent("Widget call requested; scene active \(sceneIsActive); app active \(ForegroundCallLauncher.appIsActive())")
+        widgetLaunch.request(sceneIsActive: { [weak self] in self?.sceneIsActive == true }, start: { [weak self] in
             guard let self else { return }
-            self.link.reportWatchEvent("Widget call starting after app activation")
+            self.link.reportWatchEvent("Widget call starting; scene active \(self.sceneIsActive); app active \(ForegroundCallLauncher.appIsActive())")
             self.start()
         }, onTimeout: { [weak self] in
             self?.error = "Open \(AppBrand.name) and tap Call. The app could not become active."
-            self?.link.reportWatchEvent("Widget launch expired before app activation")
+            if let self {
+                self.link.reportWatchEvent("Widget launch expired; scene active \(self.sceneIsActive); app active \(ForegroundCallLauncher.appIsActive())")
+            }
         })
     }
     func start() {
+        guard !VoiceRecorder.shared.holdsMicrophone else { error = "Finish your voice message before calling."; return }
+        // Calls can enter through Shortcuts without the visible Call button.
+        // Do not leave an older recording request waiting behind this call.
+        VoiceMessageLaunch.shared.cancel()
         widgetLaunch.cancel()
         guard phase == "idle", !finishing else { return }
         guard let account = AccountVault.load() ?? DirectProbe.account else { error = "Open \(AppBrand.name) on iPhone once to sync sign-in."; return }
@@ -53,7 +66,27 @@ import DirectRTC
         name = account.name
         UserDefaults.standard.removeObject(forKey: "DotWatch.lastWatchError")
         link.reportWatchEvent("Direct \(deviceName) call requested")
-        let audio = CallAudio(), systemCall = DeviceCallSession(), direct = DirectCall(account: account, http: DirectProbe.transport(account))
+        var capture: PacketCapture?
+        var captureURL: URL?
+        do {
+            if let url = try CallDiagnostics.shared.consumeNextCaptureURL() {
+                captureURL = url
+                capture = try PacketCapture(url: url, mediaFormat: .neteq48k)
+            }
+        } catch {
+            if let captureURL { CallDiagnostics.shared.captureFinished(url: captureURL, error: error.localizedDescription) }
+            // An optional diagnostic failure must never prevent the call.
+        }
+        let audio = CallAudio(), systemCall = DeviceCallSession(), direct = DirectCall(account: account, http: DirectProbe.transport(account), capture: capture)
+        if let captureURL {
+            direct.onCaptureFinished = { summary in
+                var notices: [String] = []
+                if let error = summary.writeError { notices.append(error) }
+                if summary.truncated { notices.append("Recording reached its duration or size limit.") }
+                if summary.droppedEvents > 0 { notices.append("\(summary.droppedEvents) diagnostic events were missed; replay is incomplete.") }
+                CallDiagnostics.shared.captureFinished(url: captureURL, error: notices.isEmpty ? nil : notices.joined(separator: " "))
+            }
+        }
         self.audio = audio; self.systemCall = systemCall; self.direct = direct
         systemCall.onRegistered = { [weak self] in self?.completeRegistration(.success(())) }
         systemCall.onProgress = { [weak self] message in self?.link.reportWatchEvent(message) }
@@ -83,18 +116,30 @@ import DirectRTC
                 #if os(watchOS)
                 WKInterfaceDevice.current().play(.start)
                 #endif
-                sendTask = Task {
-                    while !Task.isCancelled, attempt == generation {
-                        guard let pipeline = direct.pipeline else { break }
-                        pipeline.push(audio.takeInput()); audio.play(pipeline.takeOutput())
-                        if let failure = pipeline.failure {
-                            link.reportWatchEvent("Media connection failed: \(failure)")
-                            end(message: "The call connection was lost. Check your internet connection and call again.")
-                            return
+                guard let pipeline = direct.pipeline else { throw RelayFailure(message: "Call media is unavailable.") }
+                let pump = CallAudioPump { [weak self] reportDue in
+                    pipeline.push(audio.takeInput())
+                    audio.play(pipeline.takeOutput())
+                    if let failure = pipeline.failure {
+                        Task { @MainActor [weak self] in
+                            guard let self, attempt == self.generation else { return }
+                            self.link.reportWatchEvent("Media connection failed: \(failure)")
+                            self.end(message: "The call connection was lost. Check your internet connection and call again.")
                         }
-                        try? await Task.sleep(nanoseconds: 20_000_000)
+                        return false
                     }
+                    if reportDue {
+                        let stats = pipeline.statistics
+                        Task { @MainActor [weak self] in
+                            guard let self, attempt == self.generation else { return }
+                            self.lastStatistics = stats
+                            CallTrace.mediaStatistics(stats).forEach(self.link.reportWatchEvent)
+                        }
+                    }
+                    return true
                 }
+                audioPump = pump
+                pump.start()
             } catch { if attempt == generation { end(message: error.localizedDescription) } }
         }
     }
@@ -102,7 +147,12 @@ import DirectRTC
     // for didActivate. Waiting for activation inside perform() can deadlock Siri.
     func startFromSiri() async throws {
         guard !finishing else { throw RelayFailure(message: "The previous call is still ending. Try again shortly.") }
-        if phase == "idle" { start() }
+        if phase == "idle" {
+            try await widgetLaunch.awaitActive(sceneIsActive: { [weak self] in self?.sceneIsActive == true })
+            try Task.checkCancellation()
+            guard !finishing else { throw RelayFailure(message: "The previous call is still ending. Try again shortly.") }
+            start()
+        }
         guard phase != "idle" else { throw RelayFailure(message: error ?? "Open \(AppBrand.name) to finish setup.") }
         if let registrationResult { return try registrationResult.get() }
         try await withCheckedThrowingContinuation { siriWaiters.append(ReplyGate($0)) }
@@ -159,10 +209,11 @@ import DirectRTC
         }
     }
     func end(message: String? = nil) {
+        widgetLaunch.cancel()
         guard phase != "idle" else { return }
         completeRegistration(.failure(RelayFailure(message: message ?? "Call cancelled.")))
         generation += 1; finishing = true
-        sendTask?.cancel(); sendTask = nil
+        audioPump?.stop(); audioPump = nil
         audio?.stop(); audio = nil
         systemCall?.end(failed: message != nil); systemCall = nil
         lastStatistics = direct?.pipeline?.statistics ?? [:]

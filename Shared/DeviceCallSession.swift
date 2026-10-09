@@ -5,9 +5,10 @@ import CallKit
 // The paired iPhone must not register a second CallKit call for this conversation.
 @MainActor final class DeviceCallSession: NSObject, @preconcurrency CXProviderDelegate {
     private let provider: CXProvider
-    private let controller = CXCallController()
+    private let controller = CXCallController(queue: .main)
     private let id = UUID()
     private var activation: ReplyGate<Void>?
+    private let readiness = CallProviderReadiness()
     private var ended = false
     var onRegistered: (() -> Void)?
     var onEnd: ((String?) -> Void)?
@@ -42,18 +43,29 @@ import CallKit
             return
         }
         #endif
-        onProgress?("Registering system call")
+        guard !ended else { throw CancellationError() }
+        onProgress?("Waiting for system call provider")
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let gate = ReplyGate(continuation)
             activation = gate
             DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
                 guard let self, self.activation != nil else { return }
                 self.activation = nil
+                self.readiness.cancel()
                 gate.finish(.failure(RelayFailure(message: "The system did not activate call audio.")))
             }
-            let action = CXStartCallAction(call: id, handle: CXHandle(type: .generic, value: name))
-            controller.request(CXTransaction(action: action)) { error in
-                if let error { gate.finish(.failure(error)) }
+            readiness.request { [weak self] in
+                guard let self, !self.ended, self.activation != nil else { return }
+                self.onProgress?("Registering system call after provider ready")
+                let action = CXStartCallAction(call: self.id, handle: CXHandle(type: .generic, value: name))
+                self.controller.request(CXTransaction(action: action)) { [weak self] error in
+                    if let error {
+                        self?.activation = nil
+                        let failure = error as NSError
+                        self?.onProgress?("System call request failed: \(failure.domain) \(failure.code)")
+                        gate.finish(.failure(error))
+                    }
+                }
             }
         }
     }
@@ -66,6 +78,7 @@ import CallKit
     func end(failed: Bool) {
         guard !ended else { return }
         ended = true
+        readiness.cancel()
         activation?.finish(.failure(CancellationError())); activation = nil
         #if targetEnvironment(simulator)
         if simulated {
@@ -91,7 +104,13 @@ import CallKit
             }
         }
     }
+    func providerDidBegin(_ provider: CXProvider) {
+        guard !ended else { return }
+        onProgress?("System call provider ready")
+        readiness.providerDidBegin()
+    }
     func providerDidReset(_ provider: CXProvider) {
+        readiness.cancel()
         activation?.finish(.failure(RelayFailure(message: "Call service reset."))); activation = nil
         if !ended { onEnd?("Call service reset.") }
     }

@@ -11,6 +11,7 @@ import UIKit
     private let isActive: () -> Bool
     private let timeout: Duration
     private var pending: Task<Void, Never>?
+    private var cancellationGeneration = 0
     var isPending: Bool { pending != nil }
 
     init(timeout: Duration = .seconds(10), isActive: @escaping () -> Bool = ForegroundCallLauncher.appIsActive) {
@@ -24,7 +25,24 @@ import UIKit
         return UIApplication.shared.applicationState == .active
         #endif
     }
-    func request(start: @escaping () -> Void, onTimeout: @escaping () -> Void) {
+    // Intent execution may begin before the foreground scene finishes activating.
+    // Keep this wait in the caller's task so cancellation leaves no queued call.
+    func awaitActive(sceneIsActive: @escaping () -> Bool) async throws {
+        let generation = cancellationGeneration
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        await Task.yield()
+        while true {
+            try Task.checkCancellation()
+            guard generation == cancellationGeneration else { throw CancellationError() }
+            guard ContinuousClock.now < deadline else { throw ActivationTimeout() }
+            if sceneIsActive() && isActive() { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+    }
+    private struct ActivationTimeout: LocalizedError {
+        var errorDescription: String? { "The app could not become active. Open it and tap Call." }
+    }
+    func request(sceneIsActive: @escaping () -> Bool = { true }, start: @escaping () -> Void, onTimeout: @escaping () -> Void) {
         guard pending == nil else { return }
         let deadline = ContinuousClock.now.advanced(by: timeout)
         pending = Task { [weak self] in
@@ -37,7 +55,7 @@ import UIKit
                     onTimeout()
                     return
                 }
-                if isActive() {
+                if sceneIsActive() && isActive() {
                     pending = nil
                     start()
                     return
@@ -48,6 +66,7 @@ import UIKit
         }
     }
     func cancel() {
+        cancellationGeneration += 1
         pending?.cancel()
         pending = nil
     }

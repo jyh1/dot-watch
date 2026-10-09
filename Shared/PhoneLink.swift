@@ -36,6 +36,11 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
     #endif
     override init() {
         super.init()
+        #if DEBUG && targetEnvironment(simulator)
+        // A layout/route preview must not activate credential synchronization or
+        // receive an account update that could resume a saved outbox upload.
+        if VoiceSimulatorUI.enabled { return }
+        #endif
         if DirectProbe.enabled { ready = true; return }
         if WCSession.isSupported() { WCSession.default.delegate = self; WCSession.default.activate() }
     }
@@ -70,6 +75,7 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
             #if os(watchOS)
             if let credentials = state["credentials"] as? Data { try WatchCredentials.accept(credentials) }
             ready = AccountVault.load() != nil
+            VoiceOutbox.shared.accountChanged()
             #else
             ready = state["ready"] as? Bool ?? false
             #endif
@@ -110,11 +116,28 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
                 self.ready = AccountVault.load() != nil
                 self.dotName = AccountVault.load()?.name ?? AppBrand.name
                 self.setupError = self.ready ? nil : "Open \(AppBrand.name) on iPhone once to sync sign-in."
+                // ready stays true when switching between two connected Dots.
+                VoiceOutbox.shared.accountChanged()
             } catch { self.setupError = error.localizedDescription }
         }
         #endif
     }
+    func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {
+        guard fileTransfer.file.metadata?["kind"] as? String == "callDiagnostics" else { return }
+        #if os(watchOS)
+        let message = error?.localizedDescription
+        Task { @MainActor in CallDiagnostics.shared.transferFinished(error: message) }
+        #endif
+    }
     #if os(iOS)
+    func session(_ session: WCSession, didReceive file: WCSessionFile) {
+        guard file.metadata?["kind"] as? String == "callDiagnostics" else { return }
+        // WatchConnectivity's temporary file disappears after this delegate returns.
+        let message: String?
+        do { _ = try CallDiagnostics.receiveTransferredFile(file.fileURL); message = nil }
+        catch { message = error.localizedDescription }
+        Task { @MainActor in CallDiagnostics.shared.transferReceived(error: message) }
+    }
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
         guard userInfo["action"] as? String == "watchTrace" else { return }
         DispatchQueue.main.async { self.onCommand?(userInfo, { _ in }) }

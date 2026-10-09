@@ -5,6 +5,16 @@ import unittest
 from configure import configuration, generate
 
 class ConfigurationTests(unittest.TestCase):
+    def test_icon_catalog_assigns_both_platforms(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            generate(configuration(),root)
+            catalog=root/'Assets.xcassets/DotIcon.appiconset'
+            images=json.loads((catalog/'Contents.json').read_text())['images']
+            self.assertEqual({i['platform'] for i in images},{'ios','watchos'})
+            for image in images:
+                self.assertEqual(image['size'],'1024x1024')
+                self.assertTrue((catalog/image['filename']).is_file())
     def test_defaults_have_no_personal_identity(self):
         c=configuration()
         self.assertEqual(c['app_name'],'Dot')

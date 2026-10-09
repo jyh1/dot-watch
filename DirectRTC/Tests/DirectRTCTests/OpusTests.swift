@@ -19,3 +19,22 @@ final class OpusTests: XCTestCase {
         XCTAssertLessThan(mutedPeak, 100)
     }
 }
+
+extension OpusTests {
+    func testRealVariableDurationPackets() throws {
+        let decoder = try OpusCodec()
+        for frames in [240, 480, 960, 1440] {
+            let encoder = try OpusCodec(frameSize: frames)
+            var total = 0
+            for n in 0..<10 {
+                let samples = (0..<frames).map { Int16(sin(Double(n * frames + $0) * 2 * .pi * 440 / 24000) * 4000).littleEndian }
+                let packet = try encoder.encode(samples.withUnsafeBytes { Data($0) })
+                XCTAssertEqual(ReceiveJitterBuffer.opusDuration(packet), frames * 2)
+                let decoded = try decoder.decode(packet)
+                total += decoded.count
+                XCTAssertLessThanOrEqual(decoded.count, frames * 2)
+            }
+            XCTAssertGreaterThanOrEqual(total, 10 * frames * 2 - 240)
+        }
+    }
+}

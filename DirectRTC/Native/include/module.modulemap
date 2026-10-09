@@ -1,0 +1,5 @@
+module CDotNetEq {
+    header "CDotNetEq.h"
+    export *
+    link "c++"
+}

@@ -2,6 +2,15 @@ import Foundation
 import XCTest
 
 final class SessionTests: XCTestCase {
+    @MainActor func testRefreshCannotOverwriteNewLoginOrRestoreDisconnectedAccount() throws {
+        let original = try account(expiration: Date().timeIntervalSince1970 + 3600)
+        XCTAssertNoThrow(try DotSession.validateRefreshDestination(original: original, current: original))
+        XCTAssertThrowsError(try DotSession.validateRefreshDestination(original: original, current: nil))
+        let switched = DotAccount(token: original.token, accountID: "different", dotID: "other-dot", threadID: "thread", name: "Dot", deviceID: nil)
+        XCTAssertThrowsError(try DotSession.validateRefreshDestination(original: original, current: switched))
+        let renewed = DotAccount(token: "new-session", accountID: original.accountID, dotID: original.dotID, threadID: original.threadID, name: original.name, deviceID: nil)
+        XCTAssertThrowsError(try DotSession.validateRefreshDestination(original: original, current: renewed))
+    }
     func account(expiration: Double) throws -> DotAccount {
         let data = try JSONSerialization.data(withJSONObject: ["exp":expiration])
         let claim = data.base64EncodedString().replacingOccurrences(of: "=", with: "").replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")

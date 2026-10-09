@@ -25,3 +25,13 @@ work/
 .env.*
 __pycache__/
 *.pyc
+# Private diagnostic audio and packet captures
+*.dotcall
+*.wav
+*.opus
+*.pcap
+*.pcapng
+
+# Generated pinned native NetEq dependency (prepare with Tools/build-neteq.sh).
+DirectRTC/.native-neteq-cache/
+DirectRTC/Vendor/NetEqNative/NetEqNative.xcframework

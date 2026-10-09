@@ -68,7 +68,7 @@ def generate(config, destination):
         props = dict(common, CFBundleDisplayName=name)
         if target in ('DotWatchPhone', 'DotWatchWatch'):
             props.update(DotDefaultAgentPage=config['default_agent_page'],
-                NSMicrophoneUsageDescription=f'Talk to {name} in a voice call.',
+                NSMicrophoneUsageDescription=f'Call {name} or record a voice message.',
                 CFBundleURLTypes=[dict(CFBundleURLName=bundle+'.call', CFBundleURLSchemes=[config['url_scheme']])],
                 INAlternativeAppNames=[{'INAlternativeAppName': a} for a in dict.fromkeys(config['siri_aliases']) if a.casefold()!=name.casefold()])
         if target == 'DotWatchWatch':
@@ -84,12 +84,14 @@ def generate(config, destination):
         target.mkdir(exist_ok=True)
         source=Path(config[key]) if config[key] else ROOT/'Branding/Default'/('AppIcon.png' if key=='app_icon' else 'Avatar.png')
         shutil.copyfile(source,target/filename)
-        item={'filename':filename,'idiom':'universal'}
-        if key=='app_icon': item.update(platform='ios', size='1024x1024')
-        else: item['scale']='1x'
-        # Universal single-size app icons work for both current iOS and watchOS.
-        if key=='app_icon': item.pop('platform')
-        (target/'Contents.json').write_text(json.dumps({'images':[item],'info':{'author':'xcode','version':1}},indent=2))
+        if key=='app_icon':
+            # Universal 1024px icons still require an explicit platform. Without
+            # it actool silently leaves the image unassigned and emits no icon.
+            images=[dict(filename=filename, idiom='universal', platform=platform,
+                         size='1024x1024') for platform in ('ios', 'watchos')]
+        else:
+            images=[dict(filename=filename, idiom='universal', scale='1x')]
+        (target/'Contents.json').write_text(json.dumps({'images':images,'info':{'author':'xcode','version':1}},indent=2))
     widget=destination/'Widget'
     widget.mkdir(exist_ok=True)
     shutil.copyfile(assets/'Dot.imageset/Dot.png',widget/'Dot.png')

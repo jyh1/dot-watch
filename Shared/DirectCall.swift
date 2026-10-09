@@ -11,9 +11,13 @@ import DirectRTC
     private var startupBegan = false
     private var stopped = false
     private var cleanupStarted = false
+    private var capture: PacketCapture?
+    var onCaptureFinished: ((PacketCapture.Summary) -> Void)?
     private var journalKey: String { "DotWatch.direct.pending.\(account.dotID)" }
     var progress: (String) -> Void = { _ in }
-    init(account: DotAccount, http: DotTransport? = nil) { self.account = account; self.http = http ?? DotHTTP(account) }
+    init(account: DotAccount, http: DotTransport? = nil, capture: PacketCapture? = nil) {
+        self.account = account; self.http = http ?? DotHTTP(account); self.capture = capture
+    }
     func start() async throws {
         startupBegan = true
         defer { startupFinished = true }
@@ -26,7 +30,7 @@ import DirectRTC
         progress("Preparing secure audio…")
         let peer = try DirectPeer(); self.peer = peer
         // Fail early if this device cannot encode/decode Opus, before allocating a cloud call.
-        let pipeline = try DirectAudioPipeline(peer: peer); self.pipeline = pipeline
+        let pipeline = try DirectAudioPipeline(peer: peer, capture: capture); self.pipeline = pipeline
         progress("Connecting to Dot…")
         let (data, response) = try await http.request(action: "create", sdp: peer.offer)
         guard let location = response.value(forHTTPHeaderField: "Location"),
@@ -49,6 +53,13 @@ import DirectRTC
     func finish() async {
         stopped = true
         pipeline?.stop(); peer?.close()
+        // Flush optional diagnostics independently of cloud cleanup. The media
+        // producer is stopped first; file I/O must not hold up local hang-up.
+        if let capture {
+            self.capture = nil
+            let completed = onCaptureFinished
+            Task { completed?(await capture.finish()) }
+        }
         // Do not cancel an allocating request: learn its ID, then stop after attach settles.
         while startupBegan && !startupFinished { try? await Task.sleep(nanoseconds: 50_000_000) }
         guard !cleanupStarted else { return }; cleanupStarted = true

@@ -25,6 +25,7 @@ if [ ! -x "$PYTHON" ]; then
 fi
 BUILD_DIR="${DOTWATCH_BUILD_DIR:-$WORK/build}"
 if [ "${DOTWATCH_SKIP_BUILD:-0}" != 1 ]; then
+bash "$ROOT/Tools/build-neteq.sh"
 CONFIG_ARGS=()
 if [ -n "${DOTWATCH_CONFIG:-}" ]; then CONFIG_ARGS=(--config "$DOTWATCH_CONFIG"); fi
 python3 "$ROOT/Tools/configure.py" "${CONFIG_ARGS[@]}"
